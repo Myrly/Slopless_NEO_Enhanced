@@ -1408,8 +1408,29 @@ function wireChapterBody(body, chId) {
     e.preventDefault();
     const html = e.clipboardData.getData('text/html');
     const text = e.clipboardData.getData('text/plain');
-    if (html) {
-      document.execCommand('insertHTML', false, cleanPasteHtml(html));
+    // Markdown arrives as plain text, sometimes with a rich copy that's just
+    // colored text still showing the raw ** and # (a code editor). Read it
+    // as Markdown then. A real document's rich copy (headings, lists, bold)
+    // wins, even when its plain text happens to look like Markdown.
+    const md = !!text && looksLikeMarkdown(text) &&
+      (!html || (!richFormatting(html) && looksLikeMarkdown(htmlText(html))));
+    if (html || md) {
+      snapshotStructure('paste');
+      document.execCommand('insertHTML', false, cleanPasteHtml(md ? markdownToHtml(text) : html));
+      // pasting into the middle or end of a line, the engine keeps up
+      // appearances with styled spans (a heading's size, "white-space:
+      // normal"); the paragraph's own style is what counts. Clearing them
+      // leaves the engine's undo unsure, so ⌘Z comes to NEO's instead.
+      if (body.querySelector('span:not(.ph-mark)')) {
+        const caret = captureCaret();
+        stripJunkSpans(body);
+        restoreCaret(caret);
+        syncChapter(body, chId);
+        resetNativeUndo();
+        breakRun++;
+      } else {
+        undoStack.pop(); // a clean paste: the engine's own ⌘Z handles it
+      }
       reconcileMarks();
     } else if (text) {
       const parts = text.replace(/\r/g, '').split(/\n+/).filter((p) => p.trim());
@@ -2417,10 +2438,14 @@ document.addEventListener('selectionchange', () => {
 });
 
 // Reduce pasted HTML to what a manuscript is made of: paragraphs, bold,
-// italic, underline, strikethrough. Word, Apple Notes, Google Docs and browsers each dress a
-// paragraph differently — <p>, <div>, a line break inside a block, styled
-// spans — so every block boundary and <br> becomes a paragraph break, and
-// styling that only lives in a style attribute is read as bold/italic.
+// italic, underline, strikethrough, and the paragraph styles (headings,
+// quotes, lists, section breaks). Word, Apple Notes, Google Docs and
+// browsers each dress a paragraph differently — <p>, <div>, a line break
+// inside a block, styled spans — so every block boundary and <br> becomes
+// a paragraph break, and styling that only lives in a style attribute is
+// read as bold/italic.
+const PASTE_FMT = { h1: '\uE011', h2: '\uE012', quote: '\uE013', ul: '\uE014', ol: '\uE015' };
+const PASTE_BREAK = '\uE016'; // a *** section break
 function cleanPasteHtml(html) {
   const holder = document.createElement('div');
   holder.innerHTML = html;
@@ -2443,6 +2468,38 @@ function cleanPasteHtml(html) {
     if (deco.includes('underline')) wrap('u');
     if (deco.includes('line-through')) wrap('s');
   });
+  // Word marks its list and quote paragraphs with classes, and types the
+  // bullet or number itself into a span it tells other apps to ignore
+  holder.querySelectorAll('p[class*="MsoList"], p[class*="Quote"]').forEach((p) => {
+    if (/Quote/.test(p.className)) { p.dataset.pasteFmt = 'quote'; return; }
+    const bullet = p.querySelector('[style*="mso-list:ignore" i], [style*="mso-list: ignore" i]');
+    p.dataset.pasteFmt = bullet && /\d/.test(bullet.textContent) ? 'ol' : 'ul';
+    if (bullet) bullet.remove();
+  });
+  // Each piece of text learns the paragraph style of the block it sits in,
+  // carried as an invisible mark until the paragraphs are rebuilt below.
+  // The innermost block decides: a list inside a quote is a list.
+  const styleOf = (el) => {
+    const b = el.closest('h1, h2, h3, h4, h5, h6, li, blockquote, [data-paste-fmt], p[data-fmt]');
+    if (!b) return '';
+    if (b.dataset.pasteFmt) return b.dataset.pasteFmt;
+    if (b.dataset.fmt) return b.dataset.fmt; // copied from NEO itself
+    if (b.tagName === 'LI') { const list = b.closest('ol, ul'); return list && list.tagName === 'OL' ? 'ol' : 'ul'; }
+    if (b.tagName === 'BLOCKQUOTE') return 'quote';
+    return b.tagName === 'H1' ? 'h1' : 'h2';
+  };
+  const tw = document.createTreeWalker(holder, NodeFilter.SHOW_TEXT);
+  const texts = [];
+  while (tw.nextNode()) texts.push(tw.currentNode);
+  for (const n of texts) {
+    const fmt = n.data.trim() && styleOf(n.parentElement);
+    if (PASTE_FMT[fmt]) n.data = PASTE_FMT[fmt] + n.data;
+  }
+  // a heading's size and weight belong to its style, not to its words
+  // (NEO's own copies spell out every computed style on each paragraph)
+  holder.querySelectorAll('h1, h2, h3, h4, h5, h6, p[data-fmt]').forEach((h) => h.removeAttribute('style'));
+  // a horizontal rule, or a *** copied out of NEO, is a section break
+  holder.querySelectorAll('hr, p.scene-break').forEach((n) => n.replaceWith(document.createTextNode('\uE000' + PASTE_BREAK + '\uE000')));
   // a break marker at every block edge and every line break
   const BREAK = '\uE000';
   const blocks = 'p, div, li, h1, h2, h3, h4, h5, h6, blockquote, pre, section, article, header, footer, tr, dd, dt';
@@ -2462,8 +2519,12 @@ function cleanPasteHtml(html) {
     });
   }
   const out = paras.map((runs) => {
+    const plain = runs.filter((r) => r.mark === undefined).map((r) => r.text).join('');
+    if (plain.trim() === PASTE_BREAK) return '<p class="scene-break">***</p>';
+    const styled = plain.match(/[\uE011-\uE015]/);
+    const fmt = styled ? Object.keys(PASTE_FMT).find((k) => PASTE_FMT[k] === styled[0]) : '';
     // whitespace collapses like HTML's, and each paragraph is trimmed
-    runs = runs.map((r) => (r.mark !== undefined ? r : { ...r, text: r.text.replace(/\s+/g, ' ') }));
+    runs = runs.map((r) => (r.mark !== undefined ? r : { ...r, text: r.text.replace(/[\uE011-\uE016]/g, '').replace(/\s+/g, ' ') }));
     const first = runs.find((r) => r.mark === undefined);
     if (first) first.text = first.text.replace(/^\s+/, '');
     const last = [...runs].reverse().find((r) => r.mark === undefined);
@@ -2479,10 +2540,91 @@ function cleanPasteHtml(html) {
       if (!r.text) return '';
       return runHtml(r);
     }).join('');
-    return inner.replace(/<[^>]+>/g, '').trim() ? '<p>' + inner + '</p>' : '';
+    return inner.replace(/<[^>]+>/g, '').trim() ? `<p${fmt ? ` data-fmt="${fmt}"` : ''}>` + inner + '</p>' : '';
   }).filter(Boolean);
-  // single block pastes inline (no forced new paragraph)
-  if (out.length === 1) return out[0].slice(3, -4);
+  // a single plain paragraph pastes inline (no forced new paragraph)
+  if (out.length === 1 && out[0].startsWith('<p>')) return out[0].slice(3, -4);
+  return out.join('');
+}
+
+// Does a rich copy carry real formatting, or is it just colored text?
+function richFormatting(html) {
+  const holder = document.createElement('div');
+  holder.innerHTML = html;
+  return !!holder.querySelector('p, h1, h2, h3, h4, h5, h6, li, blockquote, b, strong, i, em, u, s, strike, del, [class*="Mso"], [id^="docs-internal"]');
+}
+
+// A rich copy's text, a line per block, for telling whether it still shows
+// raw Markdown
+function htmlText(html) {
+  const holder = document.createElement('div');
+  holder.innerHTML = html;
+  holder.querySelectorAll('script, style, head, title').forEach((n) => n.remove());
+  holder.querySelectorAll('br, p, div, li, h1, h2, h3, h4, h5, h6, blockquote, pre, tr').forEach((n) => n.after(document.createTextNode('\n')));
+  return holder.textContent;
+}
+
+// Does plain text read as Markdown? Any heading, quote, list, fence or
+// rule line, or any **bold**, __bold__, *italic*, _italic_, ~~struck~~ or
+// [link](url) will do.
+const MARKDOWN_HINT = new RegExp([
+  /^ {0,3}(#{1,6}\s+\S|>\s?\S|[-*+]\s+\S|\d{1,3}[.)]\s+\S|```|~~~)/.source,
+  /^ {0,3}([-*_])( *\2){2,} *$/.source,
+  /\*\*[^*\s][^*\n]*\*\*|__[^_\s][^_\n]*__|~~[^~\s][^~\n]*~~/.source,
+  /(^|[\s(])\*[^*\s][^*\n]*?\*(?=[\s.,;:!?)]|$)|(^|[\s(])_[^_\s][^_\n]*?_(?=[\s.,;:!?)]|$)/.source,
+  /\[[^\]\n]+\]\([^)\s]+\)/.source
+].join('|'), 'm');
+const looksLikeMarkdown = (text) => MARKDOWN_HINT.test(text);
+
+// Markdown to the HTML cleanPasteHtml already understands. Each line is a
+// paragraph, the way NEO pastes plain text. Links keep their words, images
+// and code fences drop their markup, tables stay as text.
+function markdownToHtml(md) {
+  const inline = (line) => {
+    const code = [];
+    let s = line.replace(/`([^`]+)`/g, (_, c) => { code.push(c); return '\uE020' + (code.length - 1) + '\uE021'; });
+    s = escHtml(s)
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+      .replace(/(^|[^\\])(\*\*\*|___)(?=\S)(.*?\S)\2/g, '$1<b><i>$3</i></b>')
+      .replace(/(^|[^\\])(\*\*|__)(?=\S)(.*?\S)\2/g, '$1<b>$3</b>')
+      .replace(/(^|[^\\*\w])\*(?=[^\s*])(.*?[^\s*\\])\*(?![*\w])/g, '$1<i>$2</i>')
+      .replace(/(^|[^\\_\w])_(?=[^\s_])(.*?[^\s_\\])_(?![_\w])/g, '$1<i>$2</i>')
+      .replace(/(^|[^\\])~~(?=\S)(.*?\S)~~/g, '$1<s>$2</s>')
+      .replace(/&lt;u&gt;(.*?)&lt;\/u&gt;/g, '<u>$1</u>')
+      .replace(/\\([\\`*_{}\[\]()#+\-.!~>|])/g, '$1');
+    return s.replace(/\uE020(\d+)\uE021/g, (_, i) => escHtml(code[i]));
+  };
+  const out = [];
+  let list = null;
+  let fence = false;
+  const endList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+  for (const raw of md.replace(/\r/g, '').split('\n')) {
+    if (/^\s*(```|~~~)/.test(raw)) { fence = !fence; continue; }
+    const line = raw.trim();
+    if (!line) { endList(); continue; }
+    if (fence) { endList(); out.push('<p>' + escHtml(line) + '</p>'); continue; }
+    let m;
+    if (/^([-*_])( *\1){2,}$/.test(line)) { endList(); out.push('<hr>'); continue; }
+    if ((m = /^(#{1,6})\s+(.*?)(\s+#+)?$/.exec(line))) {
+      endList();
+      const h = m[1].length === 1 ? 'h1' : 'h2';
+      out.push(`<${h}>${inline(m[2])}</${h}>`);
+      continue;
+    }
+    if ((m = /^(?:>\s?)+(.*)$/.exec(line))) { endList(); out.push(`<blockquote>${inline(m[1])}</blockquote>`); continue; }
+    const bullet = /^[-*+•]\s+(?:\[[ xX]\]\s+)?(.*)$/.exec(line);
+    const number = !bullet && /^\d{1,3}[.)]\s+(.*)$/.exec(line);
+    if (bullet || number) {
+      const kind = bullet ? 'ul' : 'ol';
+      if (list !== kind) { endList(); out.push(`<${kind}>`); list = kind; }
+      out.push(`<li>${inline((bullet || number)[1])}</li>`);
+      continue;
+    }
+    endList();
+    out.push(`<p>${inline(line)}</p>`);
+  }
+  endList();
   return out.join('');
 }
 
