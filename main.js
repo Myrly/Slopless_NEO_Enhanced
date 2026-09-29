@@ -1259,6 +1259,12 @@ function buildMenu() {
         { type: 'separator' },
         { role: 'cut', label: t('Cut') }, { role: 'copy', label: t('Copy') }, { role: 'paste', label: t('Paste') },
         { role: 'pasteAndMatchStyle', label: t('Paste and Match Style') }, { role: 'selectAll', label: t('Select All') },
+        {
+          label: t('Copy Chapter Headings'),
+          type: 'checkbox',
+          checked: readJSON(LIBRARY_FILE, {}).copyChapterHeadings !== false,
+          click: (item) => sendToWindow({ type: 'copyChapterHeadings', checked: item.checked })
+        },
         { type: 'separator' },
         {
           label: isMac ? t('Find & Replace') : t('Find & Replace').replace(/&/g, '&&'),

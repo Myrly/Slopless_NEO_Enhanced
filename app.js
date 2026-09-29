@@ -1377,6 +1377,14 @@ async function deleteChapterToDarlings(chId) {
   if (text) toast(t('Chapter removed — its words are in Darlings, or {key} to undo', { key: KZ }));
 }
 
+// "Chapter 3 — The Long Way Home", as the page shows it; a lone chapter
+// shows no heading, so it has none to give
+function chapterHeadingText(chId) {
+  if (!book || book.chapterOrder.length < 2) return '';
+  const title = (book.chapterTitles || {})[chId];
+  return t('Chapter {n}', { n: book.chapterOrder.indexOf(chId) + 1 }) + (title ? ' — ' + title : '');
+}
+
 async function chapterMenu(chId, index) {
   const words = countWords(chapterText(chId));
   const choice = await optionModal(
@@ -1439,6 +1447,32 @@ function wireChapterBody(body, chId) {
         document.execCommand('insertText', false, p.trim());
       });
     }
+  });
+  // ⌘C from the top of a chapter (⌘A, or any selection that starts there)
+  // brings the chapter's heading along, the way it reads on the page.
+  // Edit → Copy Chapter Headings turns it off.
+  body.addEventListener('copy', (e) => {
+    if (library.copyChapterHeadings === false) return;
+    const heading = chapterHeadingText(chId);
+    const sel = window.getSelection();
+    if (!heading || !sel.rangeCount || sel.isCollapsed) return;
+    const r = sel.getRangeAt(0);
+    if (!body.contains(r.commonAncestorContainer)) return;
+    const before = document.createRange();
+    before.setStart(body, 0);
+    before.setEnd(r.startContainer, r.startOffset);
+    if (before.toString().trim()) return; // starts partway in: an ordinary copy
+    const holder = document.createElement('div');
+    holder.appendChild(r.cloneContents());
+    if (!holder.querySelector('p')) holder.innerHTML = '<p>' + holder.innerHTML + '</p>';
+    const paras = parasFromHtml(holder.innerHTML);
+    const lines = paras.map((p) => (p.sceneBreak ? '***'
+      : (p.fmt === 'ul' ? '• ' : p.fmt === 'ol' ? p.num + '. ' : '') + p.text));
+    const html = styledParasHtml(paras, false, (p) => (p.sceneBreak ? '<hr>' : p.html), { h1: 'h2', h2: 'h3', mark: true });
+    e.preventDefault();
+    // plain text spaces paragraphs with a blank line, like an ordinary copy
+    e.clipboardData.setData('text/plain', [heading, ...lines].join('\n\n'));
+    e.clipboardData.setData('text/html', `<h1>${escHtml(heading)}</h1>` + html);
   });
   // While macOS composes input, shortcuts stand down completely.
   let composing = false;
@@ -2480,7 +2514,7 @@ function cleanPasteHtml(html) {
   // carried as an invisible mark until the paragraphs are rebuilt below.
   // The innermost block decides: a list inside a quote is a list.
   const styleOf = (el) => {
-    const b = el.closest('h1, h2, h3, h4, h5, h6, li, blockquote, [data-paste-fmt], p[data-fmt]');
+    const b = el.closest('h1, h2, h3, h4, h5, h6, li, blockquote, [data-paste-fmt], [data-fmt]');
     if (!b) return '';
     if (b.dataset.pasteFmt) return b.dataset.pasteFmt;
     if (b.dataset.fmt) return b.dataset.fmt; // copied from NEO itself
@@ -5830,7 +5864,7 @@ function runHtml(r, xml) {
 // Styled paragraphs as HTML: headings become h3/h4 (the chapter's own
 // heading sits above them), and each unbroken run of quote or list lines
 // shares one <blockquote>, <ul> or <ol>. `plain` renders everything else.
-function styledParasHtml(paras, xml, plain) {
+function styledParasHtml(paras, xml, plain, heads = { h1: 'h3', h2: 'h4' }) {
   const WRAP = { quote: ['blockquote', 'p'], ul: ['ul', 'li'], ol: ['ol', 'li'] };
   const out = [];
   let open = null;
@@ -5841,8 +5875,11 @@ function styledParasHtml(paras, xml, plain) {
     const inner = () => p.runs.map((r) => runHtml(r, xml)).join('');
     const align = p.align === 'center' || p.align === 'right' ? ` style="text-align:${p.align}"` : '';
     if (w) out.push(`<${w[1]}>${inner()}</${w[1]}>`);
-    else if (!p.sceneBreak && p.fmt === 'h1') out.push(`<h3${align}>${inner()}</h3>`);
-    else if (!p.sceneBreak && p.fmt === 'h2') out.push(`<h4${align}>${inner()}</h4>`);
+    // (heads.mark keeps NEO's own style name on the tag, for pasting back in)
+    else if (!p.sceneBreak && heads[p.fmt]) {
+      const tag = heads[p.fmt];
+      out.push(`<${tag}${heads.mark ? ` data-fmt="${p.fmt}"` : ''}${align}>${inner()}</${tag}>`);
+    }
     else out.push(plain(p));
   }
   if (open) out.push(`</${WRAP[open][0]}>`);
@@ -6357,6 +6394,10 @@ window.neo.onMenu(async (msg) => {
   if (msg.type === 'checkUpdate') checkForUpdate();
   if (msg.type === 'update') updateMessage(msg);
   if (msg.type === 'export') doExport(msg.format);
+  if (msg.type === 'copyChapterHeadings') {
+    library.copyChapterHeadings = msg.checked;
+    await window.neo.writeLibrary(library);
+  }
   if (msg.type === 'exportCustomChapterTitles') {
     library.exportCustomChapterTitles = msg.checked;
     await window.neo.writeLibrary(library);
