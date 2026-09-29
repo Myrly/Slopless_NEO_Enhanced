@@ -1281,6 +1281,38 @@ function buildMenu() {
     {
       label: t('Format'),
       submenu: [
+        // The editor handles these keys itself (so they also work in NEO
+        // Pocket); the menu only shows them — registerAccelerator: false
+        // keeps the menu from taking the keystroke first.
+        ...[
+          [t('Bold'), 'CmdOrCtrl+B', 'bold'],
+          [t('Italic'), 'CmdOrCtrl+I', 'italic'],
+          [t('Underline'), 'CmdOrCtrl+U', 'underline'],
+          [t('Strikethrough'), 'CmdOrCtrl+Shift+S', 'strike']
+        ].map(([label, accelerator, value]) => ({
+          label, accelerator, registerAccelerator: false, click: () => sendToWindow({ type: 'format', value })
+        })),
+        {
+          label: t('Paragraph Style'),
+          submenu: [
+            [t('Heading'), 'CmdOrCtrl+Alt+1', 'h1'],
+            [t('Subheading'), 'CmdOrCtrl+Alt+2', 'h2'],
+            [t('Block Quote'), 'CmdOrCtrl+Shift+9', 'quote'],
+            [t('Bulleted List'), 'CmdOrCtrl+Shift+8', 'ul'],
+            [t('Numbered List'), 'CmdOrCtrl+Shift+7', 'ol'],
+            null,
+            [t('Normal Paragraph'), 'CmdOrCtrl+Alt+0', 'plain']
+          ].map((row) => (row ? {
+            label: row[0], accelerator: row[1], registerAccelerator: false, click: () => sendToWindow({ type: 'format', value: row[2] })
+          } : { type: 'separator' }))
+        },
+        {
+          label: t('Clear Formatting'),
+          accelerator: 'CmdOrCtrl+\\',
+          registerAccelerator: false,
+          click: () => sendToWindow({ type: 'format', value: 'clear' })
+        },
+        { type: 'separator' },
         {
           label: t('Body Font'),
           submenu: [

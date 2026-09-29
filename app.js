@@ -1410,8 +1410,10 @@ function wireChapterBody(body, chId) {
       if (destructive) healSelectionSeams(body);
     }
     if (styleKeepScroll(e)) return;
+    if (formatKeys(e)) return;
     if (handlePoetry(e, body, chId)) return;
     if (poetryBackspace(e, body, chId)) return;
+    if (formatBackspace(e, body, chId)) return;
     if (sceneBreakDelete(e, body, chId)) return;
     if (spaceSafeDelete(e, body, chId)) return;
     if (emptyChapterBackspace(e, body, chId)) return;
@@ -1419,6 +1421,8 @@ function wireChapterBody(body, chId) {
     if (guardMarkerDelete(e, body, chId)) return;
     if (handleEnter(e, body, chId)) return;
     if (handleTabSpacing(e)) return;
+    if (markdownBlockKey(e, body, chId)) return;
+    if (markdownInlineKey(e, body)) return;
     smartKeys(e, body);
   });
   // when the whole chapter loses focus, merge every fragmented text node
@@ -1490,18 +1494,40 @@ function emptyChapterBackspace(e, body, chId) {
   return true;
 }
 
-// ⌘B / ⌘I applied by hand: the engine's native handling scrolls the
+// ⌘B / ⌘I / ⌘U applied by hand: the engine's native handling scrolls the
 // selection "into view" and mis-measures NEO's transformed page column,
 // throwing the reader to the top of the screen. Style, don't scroll.
 function styleKeepScroll(e) {
   if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return false;
-  if (e.code !== 'KeyB' && e.code !== 'KeyI') return false;
+  const cmd = { KeyB: 'bold', KeyI: 'italic', KeyU: 'underline' }[e.code];
+  if (!cmd) return false;
   e.preventDefault();
+  inlineFormat(cmd);
+  return true;
+}
+function inlineFormat(cmd) {
   const sc = $('#paper-scroll');
   const keep = sc.scrollTop;
-  document.execCommand(e.code === 'KeyB' ? 'bold' : 'italic');
+  document.execCommand(cmd);
   sc.scrollTop = keep;
   requestAnimationFrame(() => { sc.scrollTop = keep; });
+}
+
+// The rest of the Format menu's keys. Digits are read by position, but off
+// the Mac the key must still be the digit itself: Ctrl+Alt is AltGr on
+// Windows, and AltGr+0 is how a German keyboard types "}".
+function formatKeys(e) {
+  if (!(e.metaKey || e.ctrlKey)) return false;
+  const digit = /^Digit(\d)$/.exec(e.code);
+  const isDigit = digit && (IS_MAC || e.key === digit[1]);
+  let value = null;
+  if (e.shiftKey && !e.altKey && e.code === 'KeyS') value = 'strike';
+  else if (e.shiftKey && !e.altKey && digit) value = { 7: 'ol', 8: 'ul', 9: 'quote' }[digit[1]];
+  else if (e.altKey && !e.shiftKey && isDigit) value = { 0: 'plain', 1: 'h1', 2: 'h2' }[digit[1]];
+  else if (!e.shiftKey && !e.altKey && e.code === 'Backslash') value = 'clear';
+  if (!value) return false;
+  e.preventDefault();
+  applyFormat(value);
   return true;
 }
 
@@ -1777,6 +1803,7 @@ function handleEnter(e, body, chId) {
   const block = el && el.closest ? el.closest('p') : null;
   if (!block || !body.contains(block)) return false;
   if (block.classList.contains('scene-break')) { e.preventDefault(); return true; } // Enter on a *** line: nothing
+  if (block.dataset.fmt) return formattedEnter(e, body, chId, block);
   // Enter in a poetry paragraph steps back into prose: an empty line becomes
   // an ordinary paragraph in place; otherwise the line splits and the new
   // paragraph is plain (⇧Enter is how the poem continues)
@@ -2061,6 +2088,213 @@ function poetryUnderHeading(body, chId) {
   breakRun++;
 }
 
+/* ================================================================== */
+/*  FORMATTING — headings, quotes, lists, underline, strikethrough     */
+/*  A heading, quote or list item is still an ordinary paragraph that  */
+/*  carries data-fmt, so everything that walks a chapter's <p>s —      */
+/*  breaks, darlings, search, focus, exports — keeps working. Markdown  */
+/*  habits work too: "# " starts a heading, **word** turns bold.       */
+/* ================================================================== */
+
+// the chapter and paragraphs the selection touches, if it's in the manuscript
+function selectionParas() {
+  const sel = window.getSelection();
+  if (!book || currentTab !== 'manuscript' || !sel.rangeCount) return null;
+  const r = sel.getRangeAt(0);
+  let el = r.startContainer;
+  if (el.nodeType === Node.TEXT_NODE) el = el.parentElement;
+  const body = el && el.closest ? el.closest('.chapter-body') : null;
+  if (!body) return null;
+  const ps = [...body.querySelectorAll('p')].filter(
+    (p) => r.intersectsNode(p) && !p.classList.contains('scene-break')
+  );
+  return ps.length ? { body, chId: body.closest('.chapter').dataset.id, ps } : null;
+}
+
+// '' makes plain prose again; a poem line turned heading or list item
+// stops being poetry (and sheds the italic it was born with)
+function setParaFormat(p, fmt) {
+  if (!fmt) { p.removeAttribute('data-fmt'); return; }
+  if (p.classList.contains('poetry')) { p.classList.remove('poetry'); romanize(p); }
+  p.classList.remove('ghost');
+  p.dataset.fmt = fmt;
+}
+
+// Format menu and its keys
+function applyFormat(value) {
+  const at = selectionParas();
+  if (!at) { toast(t('Click into a paragraph first')); return; }
+  if (value === 'bold' || value === 'italic' || value === 'underline') inlineFormat(value);
+  else if (value === 'strike') inlineFormat('strikeThrough');
+  else if (value === 'clear') clearFormatting(at);
+  else setBlockFormat(at, value === 'plain' ? '' : value);
+}
+
+// Paragraph styles toggle: asking for the style every touched paragraph
+// already has turns them back into prose. ⌘Z undoes it in one step.
+function setBlockFormat(at, fmt) {
+  const off = !fmt || at.ps.every((p) => p.dataset.fmt === fmt);
+  if (off && !at.ps.some((p) => p.dataset.fmt)) return;
+  const caret = captureCaret();
+  snapshotStructure('paragraph style');
+  for (const p of at.ps) setParaFormat(p, off ? '' : fmt);
+  restoreCaret(caret);
+  syncChapter(at.body, at.chId);
+  resetNativeUndo();
+  breakRun++;
+}
+
+// back to plain prose: no bold, italic, underline or strikethrough in the
+// selection, and every paragraph it touches loses its style
+function clearFormatting(at) {
+  snapshotStructure('clear formatting');
+  const sel = window.getSelection();
+  if (!sel.isCollapsed) inlineFormat('removeFormat');
+  for (const p of at.ps) setParaFormat(p, '');
+  syncChapter(at.body, at.chId);
+  resetNativeUndo();
+  breakRun++;
+}
+
+// Enter in a styled paragraph. Lists and quotes carry on to the next line;
+// Enter on an empty one steps back out into prose. After a heading, prose
+// resumes.
+function formattedEnter(e, body, chId, block) {
+  e.preventDefault();
+  enterRun = 0;
+  if (block.textContent.trim() === '') {
+    snapshotStructure('paragraph style');
+    setParaFormat(block, '');
+    placeCaret(block, 0);
+    syncChapter(body, chId);
+    resetNativeUndo();
+    breakRun++;
+    return true;
+  }
+  if (block.querySelector('span:not(.ph-mark)')) {
+    const caret = captureCaret();
+    stripJunkSpans(block);
+    restoreCaret(caret);
+  }
+  document.execCommand('insertParagraph'); // the engine copies data-fmt onto the new line
+  const fmt = block.dataset.fmt;
+  if (fmt === 'h1' || fmt === 'h2') {
+    const cur = caretBlock(body);
+    if (cur && cur !== block) {
+      // Enter at the start of a heading pushes it down: the empty line above
+      // is the prose; otherwise the new line below is
+      (block.textContent.trim() === '' ? block : cur).removeAttribute('data-fmt');
+    }
+  }
+  syncChapter(body, chId);
+  return true;
+}
+
+// Backspace at the very start of a styled paragraph removes the style first
+function formatBackspace(e, body, chId) {
+  if (e.key !== 'Backspace' || e.metaKey || e.ctrlKey || e.altKey) return false;
+  const sel = window.getSelection();
+  if (!sel.rangeCount || !sel.isCollapsed) return false;
+  const block = caretBlock(body);
+  if (!block || !block.dataset.fmt) return false;
+  const r = sel.getRangeAt(0);
+  if (flatOffset(block, r.startContainer, r.startOffset) !== 0) return false;
+  e.preventDefault();
+  snapshotStructure('paragraph style');
+  setParaFormat(block, '');
+  placeCaret(block, 0);
+  syncChapter(body, chId);
+  resetNativeUndo();
+  breakRun++;
+  return true;
+}
+
+// Markdown habits at the start of a paragraph, finished with a space:
+// "# " heading, "## " subheading, "> " quote, "- " or "* " bulleted list,
+// "1. " numbered list. ⌘Z brings the typed marker back.
+const BLOCK_MARKERS = [
+  [/^#$/, 'h1'], [/^##$/, 'h2'], [/^>$/, 'quote'], [/^[-*+•]$/, 'ul'], [/^\d{1,3}[.)]$/, 'ol']
+];
+function markdownBlockKey(e, body, chId) {
+  if (e.key !== ' ' || e.metaKey || e.ctrlKey || e.altKey) return false;
+  const sel = window.getSelection();
+  if (!sel.rangeCount || !sel.isCollapsed) return false;
+  const block = caretBlock(body);
+  if (!block || block.classList.contains('scene-break')) return false;
+  const r = sel.getRangeAt(0);
+  const at = flatOffset(block, r.startContainer, r.startOffset);
+  if (at < 1 || at > 4) return false;
+  const hit = BLOCK_MARKERS.find(([re]) => re.test(block.textContent.slice(0, at)));
+  if (!hit) return false;
+  e.preventDefault();
+  snapshotStructure('paragraph style');
+  setParaFormat(block, hit[1]);
+  const a = flatPoint(block, 0), b = flatPoint(block, at);
+  if (a && b) {
+    const cut = document.createRange();
+    cut.setStart(a[0], a[1]);
+    cut.setEnd(b[0], b[1]);
+    cut.deleteContents();
+  }
+  if (!block.textContent) block.innerHTML = '<br>';
+  placeCaret(block, 0);
+  syncChapter(body, chId);
+  resetNativeUndo();
+  breakRun++;
+  return true;
+}
+
+// ...and inside a line, typing the closing marker styles what's between:
+// *italic* or _italic_, **bold** or __bold__, ***both***, ~~struck~~. The
+// markers vanish. An underscore inside a word (snake_case) is left alone,
+// as is anything escaped with a backslash.
+const INLINE_MARKERS = [
+  { re: /(^|[^*\\])\*\*\*([^*\s](?:[^*]*[^*\s])?)\*\*\*$/, len: 3, cmds: ['bold', 'italic'] },
+  { re: /(^|[^*\\])\*\*([^*\s](?:[^*]*[^*\s])?)\*\*$/, len: 2, cmds: ['bold'] },
+  { re: /(^|[^*\\\p{L}\p{N}])\*([^*\s](?:[^*]*[^*\s])?)\*$/u, len: 1, cmds: ['italic'] },
+  { re: /(^|[^_\\\p{L}\p{N}])__([^_\s](?:[^_]*[^_\s])?)__$/u, len: 2, cmds: ['bold'] },
+  { re: /(^|[^_\\\p{L}\p{N}])_([^_\s](?:[^_]*[^_\s])?)_$/u, len: 1, cmds: ['italic'] },
+  { re: /(^|[^~\\])~~([^~\s](?:[^~]*[^~\s])?)~~$/, len: 2, cmds: ['strikeThrough'] }
+];
+function markdownInlineKey(e, body) {
+  if (e.key !== '*' && e.key !== '_' && e.key !== '~') return false;
+  if (e.metaKey || e.ctrlKey || e.altKey) return false;
+  const sel = window.getSelection();
+  if (!sel.rangeCount || !sel.isCollapsed) return false;
+  const block = caretBlock(body);
+  if (!block || block.classList.contains('scene-break')) return false;
+  const r = sel.getRangeAt(0);
+  const at = flatOffset(block, r.startContainer, r.startOffset);
+  if (at < 0) return false;
+  const typed = block.textContent.slice(0, at) + e.key;
+  const rule = INLINE_MARKERS.find((m) => m.re.test(typed));
+  if (!rule) return false;
+  const m = typed.match(rule.re);
+  const open = m.index + m[1].length; // where the opening marker starts
+  const inner = m[2].length;
+  const select = (from, to) => {
+    const a = flatPoint(block, from), b = flatPoint(block, to);
+    const rg = document.createRange();
+    rg.setStart(a[0], a[1]);
+    rg.setEnd(b[0], b[1]);
+    sel.removeAllRanges();
+    sel.addRange(rg);
+  };
+  e.preventDefault();
+  // each step goes through the engine, so plain ⌘Z walks it back
+  if (rule.len > 1) { select(at - (rule.len - 1), at); document.execCommand('delete'); } // the closing marker, all but this key
+  select(open, open + rule.len);
+  document.execCommand('delete');
+  select(open, open + inner);
+  const applied = rule.cmds.filter((c) => !document.queryCommandState(c));
+  applied.forEach(inlineFormat);
+  // the caret lands after the styled words, and the next word comes out plain
+  const end = flatPoint(block, open + inner);
+  placeCaret(end[0], end[1]);
+  for (const c of applied) if (document.queryCommandState(c)) document.execCommand(c);
+  return true;
+}
+
 // Backspace just below a *** (or Delete just above one) removes the break
 // itself — prose never merges into the break's styled paragraph
 function sceneBreakDelete(e, body, chId) {
@@ -2137,7 +2371,7 @@ document.addEventListener('selectionchange', () => {
     window.neo.poetryState(inPoetry);
   }
   const inFirst = caretP && caretP.parentElement &&
-    caretP === caretP.parentElement.querySelector('p:not(.poetry)');
+    caretP === caretP.parentElement.querySelector('p:not(.poetry):not([data-fmt])');
   const capBody = inFirst ? caretP.parentElement : null;
   if (capBody !== capOffBody) {
     if (capOffBody && capOffBody.isConnected) capOffBody.classList.remove('cap-off');
@@ -2147,7 +2381,7 @@ document.addEventListener('selectionchange', () => {
 });
 
 // Reduce pasted HTML to what a manuscript is made of: paragraphs, bold,
-// italic. Word, Apple Notes, Google Docs and browsers each dress a
+// italic, underline, strikethrough. Word, Apple Notes, Google Docs and browsers each dress a
 // paragraph differently — <p>, <div>, a line break inside a block, styled
 // spans — so every block boundary and <br> becomes a paragraph break, and
 // styling that only lives in a style attribute is read as bold/italic.
@@ -2166,8 +2400,12 @@ function cleanPasteHtml(html) {
     const fw = (st.fontWeight || '').toLowerCase();
     const bold = fw === 'bold' || fw === 'bolder' || parseInt(fw, 10) >= 600;
     const ital = (st.fontStyle || '').toLowerCase() === 'italic';
-    if (bold) { const b = document.createElement('b'); while (sp.firstChild) b.appendChild(sp.firstChild); sp.appendChild(b); }
-    if (ital) { const i = document.createElement('i'); while (sp.firstChild) i.appendChild(sp.firstChild); sp.appendChild(i); }
+    const deco = (st.textDecorationLine || st.textDecoration || '').toLowerCase();
+    const wrap = (tag) => { const w = document.createElement(tag); while (sp.firstChild) w.appendChild(sp.firstChild); sp.appendChild(w); };
+    if (bold) wrap('b');
+    if (ital) wrap('i');
+    if (deco.includes('underline')) wrap('u');
+    if (deco.includes('line-through')) wrap('s');
   });
   // a break marker at every block edge and every line break
   const BREAK = '\uE000';
@@ -2184,7 +2422,7 @@ function cleanPasteHtml(html) {
     const pieces = r.text.split(BREAK);
     pieces.forEach((text, i) => {
       if (i > 0) paras.push([]);
-      if (text) paras[paras.length - 1].push({ text, b: r.b, i: r.i });
+      if (text) paras[paras.length - 1].push({ ...r, text });
     });
   }
   const out = paras.map((runs) => {
@@ -2203,10 +2441,7 @@ function cleanPasteHtml(html) {
           : '';
       }
       if (!r.text) return '';
-      let t = escHtml(r.text);
-      if (r.i) t = '<i>' + t + '</i>';
-      if (r.b) t = '<b>' + t + '</b>';
-      return t;
+      return runHtml(r);
     }).join('');
     return inner.replace(/<[^>]+>/g, '').trim() ? '<p>' + inner + '</p>' : '';
   }).filter(Boolean);
@@ -4575,7 +4810,7 @@ function updateFocus() {
   // on its chapter body (a class on the body itself is never saved)
   document.querySelectorAll('.chapter-body.focus-cap').forEach((b) => b.classList.remove('focus-cap'));
   const body = p.parentElement;
-  const first = body.querySelector('p:not(.poetry)'); // the drop cap skips poetry paragraphs
+  const first = body.querySelector('p:not(.poetry):not([data-fmt])'); // the drop cap skips poetry, headings, quotes and lists
   const firstText = first && document.createTreeWalker(first, NodeFilter.SHOW_TEXT).nextNode();
   if (r && firstText && r.comparePoint(firstText, 0) === 0) body.classList.add('focus-cap');
 }
@@ -5011,6 +5246,16 @@ function shortcutSections() {
     { title: tk('Formatting'), rows: [
       [K('⌘B', 'Ctrl+B'), tk('Bold')],
       [K('⌘I', 'Ctrl+I'), tk('Italic')],
+      [K('⌘U', 'Ctrl+U'), tk('Underline')],
+      [K('⌘⇧S', 'Ctrl+Shift+S'), tk('Strikethrough')],
+      [K('⌘⌥1', 'Ctrl+Alt+1'), tk('Heading')],
+      [K('⌘⌥2', 'Ctrl+Alt+2'), tk('Subheading')],
+      [K('⌘⇧9', 'Ctrl+Shift+9'), tk('Block quote')],
+      [K('⌘⇧8', 'Ctrl+Shift+8'), tk('Bulleted list')],
+      [K('⌘⇧7', 'Ctrl+Shift+7'), tk('Numbered list')],
+      [K('⌘⌥0', 'Ctrl+Alt+0'), tk('Back to a normal paragraph')],
+      [K('⌘\\', 'Ctrl+\\'), tk('Clear formatting')],
+      ['**bold**', tk('Markdown works as you type'), tk('*italic*, **bold**, ~~strikethrough~~. At the start of a line: # heading, ## subheading, > quote, - list, 1. numbered list.')],
       [K('⌘⇧L', 'Ctrl+Shift+L'), tk('Align paragraph left')],
       [K('⌘⇧C', 'Ctrl+Shift+C'), tk('Center paragraph')],
       [K('⌘⇧R', 'Ctrl+Shift+R'), tk('Align paragraph right')],
@@ -5124,7 +5369,8 @@ function safeName(s) {
 }
 
 // Every paragraph is rebuilt from its text runs, so exports carry only
-// author-meaningful markup: text, bold, italic, alignment, scene breaks.
+// author-meaningful markup: text, bold, italic, underline, strikethrough,
+// alignment, paragraph styles, scene breaks.
 // Stray spans, inline styles, trailing <br>s, and no-break spaces all
 // stop at this door.
 function parasFromHtml(html) {
@@ -5137,26 +5383,30 @@ function parasFromHtml(html) {
     if (brk) brk.remove();
   });
   holder.querySelectorAll('.darling-anchor, .ph-mark, .ghost').forEach((n) => n.remove());
-  return [...holder.querySelectorAll('p')].map((p) => {
+  const paras = [...holder.querySelectorAll('p')].map((p) => {
     const sceneBreak = p.classList.contains('scene-break');
     const poetry = p.classList.contains('poetry');
     const align = (p.style && p.style.textAlign) || '';
+    const fmt = (!sceneBreak && p.dataset.fmt) || '';
     const runs = paraRuns(p.innerHTML).filter((r) => r.text);
-    const inner = runs.map((r) => {
-      let t = escHtml(r.text);
-      if (r.i) t = '<i>' + t + '</i>';
-      if (r.b) t = '<b>' + t + '</b>';
-      return t;
-    }).join('');
+    const inner = runs.map((r) => runHtml(r)).join('');
     return {
       sceneBreak,
       poetry,
+      fmt, // '', 'h1', 'h2', 'quote', 'ul' or 'ol'
       text: p.innerText.replace(/\u00a0/g, ' ').trim(),
       runs,
       align,
       html: `<p${poetry ? ' class="poetry"' : ''}${align ? ` style="text-align:${align}"` : ''}>${inner}</p>`
     };
   }).filter((p) => p.sceneBreak || p.text);
+  // numbered lines count along each unbroken run, as on the page
+  let n = 0;
+  for (const p of paras) {
+    n = p.fmt === 'ol' ? n + 1 : 0;
+    if (n) p.num = n;
+  }
+  return paras;
 }
 
 function exportChapters() {
@@ -5204,7 +5454,11 @@ function buildTxt(data) {
   out += t('by {author}', { author: d.author }) + '\n\n\n';
   for (const ch of d.sections) {
     if (ch.heading) out += `${ch.heading.toUpperCase()}\n\n`;
-    for (const p of ch.paras) out += p.sceneBreak ? '\n***\n\n' : (p.poetry ? '    ' : '') + p.text + '\n\n';
+    for (const p of ch.paras) {
+      if (p.sceneBreak) { out += '\n***\n\n'; continue; }
+      const lead = p.fmt === 'ul' ? '  • ' : p.fmt === 'ol' ? `  ${p.num}. ` : (p.poetry || p.fmt === 'quote') ? '    ' : '';
+      out += lead + (p.fmt === 'h1' ? p.text.toUpperCase() : p.text) + '\n\n';
+    }
     out += '\n';
   }
   return out;
@@ -5216,21 +5470,27 @@ function buildMd(data) {
   const mdMeta = (s) => String(s || '').replace(/([\\`*_\[\]#<>])/g, '\\$1');
   // wrap a run in emphasis markers, keeping boundary spaces outside them
   const mdRun = (r) => {
-    let t = r.text.replace(/([\\*_`])/g, '\\$1');
+    let t = r.text.replace(/([\\*_`~])/g, '\\$1');
     const mark = r.b && r.i ? '***' : r.b ? '**' : r.i ? '*' : '';
-    if (!mark) return t;
+    if (!mark && !r.s && !r.u) return t;
     const lead = t.match(/^\s*/)[0];
     const trail = t.match(/\s*$/)[0];
-    const core = t.slice(lead.length, t.length - trail.length);
-    return core ? lead + mark + core + mark + trail : t;
+    let core = t.slice(lead.length, t.length - trail.length);
+    if (!core) return t;
+    core = mark + core + mark;
+    if (r.s) core = '~~' + core + '~~';
+    if (r.u) core = '<u>' + core + '</u>'; // Markdown has no underline of its own
+    return lead + core + trail;
   };
+  // the chapter heading is ##, so a heading inside a chapter is ###
+  const mdLead = (p) => ({ h1: '### ', h2: '#### ', quote: '> ', ul: '- ', ol: `${p.num}. ` })[p.fmt] || (p.poetry ? '> ' : '');
   let out = `# ${mdMeta(d.title)}\n\n`;
   if (d.subtitle) out += `*${mdMeta(d.subtitle)}*\n\n`;
   out += `**${t('by {author}', { author: mdMeta(d.author) })}**\n\n`;
   for (const ch of d.sections) {
     if (ch.heading) out += `\n## ${mdMeta(ch.heading)}\n\n`;
     for (const p of ch.paras) {
-      out += p.sceneBreak ? '\n***\n\n' : (p.poetry ? '> ' : '') + p.runs.map(mdRun).join('') + '\n\n';
+      out += p.sceneBreak ? '\n***\n\n' : mdLead(p) + p.runs.map(mdRun).join('') + '\n\n';
     }
   }
   return out;
@@ -5244,7 +5504,7 @@ function buildHtml(data, opts = {}) {
     // only the chapter's opening paragraph gets the enlarged initial —
     // scene breaks resume ordinary body text
     let first = true;
-    const paras = ch.paras.map((p) => {
+    const paras = styledParasHtml(ch.paras, false, (p) => {
       if (p.sceneBreak) return '<p class="brk">***</p>';
       if (p.poetry) return p.html;
       let html = p.html;
@@ -5258,7 +5518,7 @@ function buildHtml(data, opts = {}) {
       }
       first = false;
       return html;
-    }).join('\n');
+    });
     return `
     <section class="chapter">
       ${ch.heading ? `<h2>${escHtml(ch.heading)}</h2>` : ''}
@@ -5286,6 +5546,13 @@ function buildHtml(data, opts = {}) {
   .chapter p.poetry { text-indent: 0; margin: 0 2.5em; }
   .chapter p:not(.poetry) + p.poetry, .chapter h2 + p.poetry { margin-top: 0.9em; }
   .chapter p.poetry + p:not(.poetry) { margin-top: 0.9em; }
+  .chapter h3, .chapter h4 { margin: 1.4em 0 0.5em; line-height: 1.3; }
+  .chapter h3 { font-size: 1.3em; }
+  .chapter h4 { font-size: 1.1em; }
+  .chapter blockquote { margin: 0.9em 2.5em; padding-left: 1em; border-left: 3px solid #ccc; }
+  .chapter blockquote p, .chapter li { text-indent: 0; }
+  .chapter ul, .chapter ol { margin: 0.9em 0 0.9em 2.5em; padding: 0; }
+  .chapter h3 + p, .chapter h4 + p, .chapter blockquote + p, .chapter ul + p, .chapter ol + p { text-indent: 0; }
   .prov { margin-top: 80px; text-align: center; color: #999; font-size: 9pt; }
 </style></head><body>
 ${opts.cover ? `<div class="coverpage"><img src="data:${opts.cover.mime};base64,${opts.cover.base64}" alt="${t('Cover')}"/></div>` : ''}
@@ -5303,27 +5570,70 @@ const escXml = (s) => String(s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 
-// Walk a paragraph's DOM and emit [{text, b, i}] so docx/epub get real bold/italic
+// Walk a paragraph's DOM and emit [{text, b, i, u, s}] so docx/epub get
+// real bold, italic, underline and strikethrough
 function paraRuns(pHtml) {
   const holder = document.createElement('div');
   holder.innerHTML = pHtml;
   const runs = [];
-  const walk = (node, b, i) => {
+  const walk = (node, st) => {
     for (const child of node.childNodes) {
       if (child.nodeType === Node.TEXT_NODE) {
-        if (child.textContent) runs.push({ text: child.textContent.replace(/\u00a0/g, ' '), b, i });
+        if (child.textContent) runs.push({ text: child.textContent.replace(/\u00a0/g, ' '), ...st });
       } else if (child.nodeType === Node.ELEMENT_NODE) {
         if (child.classList && child.classList.contains('ph-mark')) {
           runs.push({ mark: child.dataset.sid || '' });
           continue;
         }
         const tag = child.tagName;
-        walk(child, b || tag === 'B' || tag === 'STRONG', i || tag === 'I' || tag === 'EM');
+        // the engine sometimes styles by attribute instead of by tag: bold
+        // laid over an italic word becomes <i style="font-weight: bold">
+        const css = child.style || {};
+        const fw = (css.fontWeight || '').toLowerCase();
+        const deco = (css.textDecorationLine || css.textDecoration || '').toLowerCase();
+        walk(child, {
+          b: st.b || tag === 'B' || tag === 'STRONG' || fw === 'bold' || fw === 'bolder' || parseInt(fw, 10) >= 600,
+          i: st.i || tag === 'I' || tag === 'EM' || (css.fontStyle || '').toLowerCase() === 'italic',
+          u: st.u || tag === 'U' || tag === 'INS' || deco.includes('underline'),
+          s: st.s || tag === 'S' || tag === 'STRIKE' || tag === 'DEL' || deco.includes('line-through')
+        });
       }
     }
   };
-  walk(holder, false, false);
+  walk(holder, { b: false, i: false, u: false, s: false });
   return runs;
+}
+
+// a run back to markup; xml for EPUB's XHTML
+function runHtml(r, xml) {
+  let t = xml ? escXml(r.text) : escHtml(r.text);
+  if (r.s) t = '<s>' + t + '</s>';
+  if (r.u) t = '<u>' + t + '</u>';
+  if (r.i) t = xml ? '<em>' + t + '</em>' : '<i>' + t + '</i>';
+  if (r.b) t = xml ? '<strong>' + t + '</strong>' : '<b>' + t + '</b>';
+  return t;
+}
+
+// Styled paragraphs as HTML: headings become h3/h4 (the chapter's own
+// heading sits above them), and each unbroken run of quote or list lines
+// shares one <blockquote>, <ul> or <ol>. `plain` renders everything else.
+function styledParasHtml(paras, xml, plain) {
+  const WRAP = { quote: ['blockquote', 'p'], ul: ['ul', 'li'], ol: ['ol', 'li'] };
+  const out = [];
+  let open = null;
+  for (const p of paras) {
+    const w = !p.sceneBreak && WRAP[p.fmt];
+    if (open && open !== p.fmt) { out.push(`</${WRAP[open][0]}>`); open = null; }
+    if (w && !open) { out.push(`<${w[0]}>`); open = p.fmt; }
+    const inner = () => p.runs.map((r) => runHtml(r, xml)).join('');
+    const align = p.align === 'center' || p.align === 'right' ? ` style="text-align:${p.align}"` : '';
+    if (w) out.push(`<${w[1]}>${inner()}</${w[1]}>`);
+    else if (!p.sceneBreak && p.fmt === 'h1') out.push(`<h3${align}>${inner()}</h3>`);
+    else if (!p.sceneBreak && p.fmt === 'h2') out.push(`<h4${align}>${inner()}</h4>`);
+    else out.push(plain(p));
+  }
+  if (open) out.push(`</${WRAP[open][0]}>`);
+  return out.join('\n');
 }
 
 /* ---------- DOCX ---------- */
@@ -5334,10 +5644,15 @@ function docxP(runs, opts = {}) {
   if (opts.align) pPr.push(`<w:jc w:val="${opts.align}"/>`);
   if (opts.indent) pPr.push('<w:ind w:firstLine="480"/>');
   if (opts.poetry) pPr.push('<w:ind w:left="720" w:right="720"/>');
+  if (opts.list) pPr.push('<w:ind w:left="720" w:hanging="360"/>');
   if (opts.spaceBefore) pPr.push(`<w:spacing w:before="${opts.spaceBefore}" w:line="360" w:lineRule="auto"/>`);
   const rXml = runs.map((r) => {
-    const rPr = (r.b ? '<w:b/>' : '') + (r.i ? '<w:i/>' : '') + (opts.size ? `<w:sz w:val="${opts.size}"/>` : '');
-    return `<w:r>${rPr ? '<w:rPr>' + rPr + '</w:rPr>' : ''}<w:t xml:space="preserve">${escXml(r.text)}</w:t></w:r>`;
+    // (Word wants run properties in schema order: b, i, strike, sz, u)
+    const rPr = (r.b || opts.bold ? '<w:b/>' : '') + (r.i ? '<w:i/>' : '') + (r.s ? '<w:strike/>' : '') +
+      (opts.size ? `<w:sz w:val="${opts.size}"/>` : '') + (r.u ? '<w:u w:val="single"/>' : '');
+    // Word wants a tab as its own element, not a character in the text
+    const text = escXml(r.text).split('\t').join('</w:t><w:tab/><w:t xml:space="preserve">');
+    return `<w:r>${rPr ? '<w:rPr>' + rPr + '</w:rPr>' : ''}<w:t xml:space="preserve">${text}</w:t></w:r>`;
   }).join('');
   return `<w:p><w:pPr>${pPr.join('')}</w:pPr>${rXml}</w:p>`;
 }
@@ -5357,7 +5672,13 @@ function buildDocxEntries(data) {
       body.push(docxP([], { pageBreak: true })); // headingless story still starts fresh
     }
     for (const p of ch.paras) {
+      const align = p.align === 'center' || p.align === 'right' ? p.align : '';
       if (p.sceneBreak) body.push(docxP([{ text: '***' }], { align: 'center', spaceBefore: 240 }));
+      else if (p.fmt === 'h1') body.push(docxP(p.runs, { align, bold: true, size: 32, spaceBefore: 360 }));
+      else if (p.fmt === 'h2') body.push(docxP(p.runs, { align, bold: true, size: 28, spaceBefore: 240 }));
+      else if (p.fmt === 'quote') body.push(docxP(p.runs, { align, poetry: true }));
+      // a real tab after the bullet lands on the hanging indent
+      else if (p.fmt === 'ul' || p.fmt === 'ol') body.push(docxP([{ text: p.fmt === 'ul' ? '•\t' : p.num + '.\t' }, ...p.runs], { list: true }));
       else if (p.poetry) body.push(docxP(paraRuns(p.html), { align: p.align === 'center' || p.align === 'right' ? p.align : '', poetry: true }));
       else if (p.align === 'center' || p.align === 'right') body.push(docxP(paraRuns(p.html), { align: p.align }));
       else body.push(docxP(paraRuns(p.html), { indent: true }));
@@ -5410,7 +5731,7 @@ async function exportCover(d) {
 
 function chapterXhtml(ch, d) {
   let first = true;
-  const paras = ch.paras.map((p) => {
+  const paras = styledParasHtml(ch.paras, true, (p) => {
     if (p.sceneBreak) { first = true; return '<p class="brk">* * *</p>'; }
     const classes = [];
     if (p.poetry) classes.push('poetry');
@@ -5418,14 +5739,9 @@ function chapterXhtml(ch, d) {
     if (p.align === 'center' || p.align === 'right') classes.push(p.align);
     const cls = classes.length ? ` class="${classes.join(' ')}"` : '';
     if (!p.poetry) first = false;
-    const inner = paraRuns(p.html).map((r) => {
-      let t = escXml(r.text);
-      if (r.i) t = '<em>' + t + '</em>';
-      if (r.b) t = '<strong>' + t + '</strong>';
-      return t;
-    }).join('');
+    const inner = paraRuns(p.html).map((r) => runHtml(r, true)).join('');
     return `<p${cls}>${inner}</p>`;
-  }).join('\n');
+  });
   return `<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
@@ -5522,6 +5838,13 @@ p.brk { text-align: center; text-indent: 0; margin: 2.5em 0; letter-spacing: 0.5
 p.poetry { text-indent: 0; margin: 0 2em; }
 p:not(.poetry) + p.poetry, h1 + p.poetry { margin-top: 0.9em; }
 p.poetry + p:not(.poetry) { margin-top: 0.9em; }
+h3, h4 { margin: 1.4em 0 0.5em; }
+h3 { font-size: 1.25em; }
+h4 { font-size: 1.1em; }
+blockquote { margin: 0.9em 2em; }
+blockquote p, li { text-indent: 0; }
+ul, ol { margin: 0.9em 0 0.9em 2em; padding: 0; }
+h3 + p, h4 + p, blockquote + p, ul + p, ol + p { text-indent: 0; }
 .titlepage { text-align: center; margin-top: 30%; }
 .titlepage h2 { font-size: 2em; margin: 0; }
 .titlepage .sub { font-style: italic; }
@@ -5846,6 +6169,7 @@ window.neo.onMenu(async (msg) => {
     applyAlign(msg.value);
   }
   if (msg.type === 'poetry') togglePoetry();
+  if (msg.type === 'format') applyFormat(msg.value);
   if (msg.type === 'uiLanguage') {
     // save every open page, then reload the window in the new language
     flushAllSaves();

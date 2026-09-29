@@ -434,7 +434,7 @@ body.focus-mode .sheet ::selection { color: #1c1c1c; }
 body.focus-mode.night .sheet ::selection { color: #d6d2c6; }
 /* the drop cap sits outside the highlight's reach; same selector as the cap
    itself so no other paragraph grows a ::first-letter */
-body.focus-mode:not(.no-dropcap) .chapter-body.focus-cap:not(.cap-off) p:not(.poetry):not(p:not(.poetry) ~ p)::first-letter { color: var(--ink); }
+body.focus-mode:not(.no-dropcap) .chapter-body.focus-cap:not(.cap-off) p:not(.poetry):not([data-fmt]):not(p:not(.poetry):not([data-fmt]) ~ p)::first-letter { color: var(--ink); }
 .sheet {
   background: var(--paper); color: var(--ink);
   padding: 70px 72px 90px;
@@ -503,8 +503,8 @@ body.focus-mode:not(.no-dropcap) .chapter-body.focus-cap:not(.cap-off) p:not(.po
    pass (the source of duplicated characters on delete) never runs */
 .chapter-body p { text-indent: 2em; margin: 0; white-space: pre-wrap; }
 #aux-editor p { white-space: pre-wrap; }
-/* the chapter's opening paragraph: the first one that isn't poetry */
-.chapter-body p:not(.poetry):not(p:not(.poetry) ~ p) { text-indent: 0; }
+/* the chapter's opening paragraph: the first one that isn't poetry or styled */
+.chapter-body p:not(.poetry):not([data-fmt]):not(p:not(.poetry):not([data-fmt]) ~ p) { text-indent: 0; }
 /* Poetry paragraphs (⇧Enter): a quote, a stanza, a POV name, a dateline —
    pulled in from both margins, italic, no first-line indent, never a drop
    cap. Consecutive lines make one block; the block breathes above and below.
@@ -516,10 +516,36 @@ body.focus-mode:not(.no-dropcap) .chapter-body.focus-cap:not(.cap-off) p:not(.po
 /* cap-off while the caret is in the first paragraph: the rule must stop
    MATCHING entirely — a matching first-letter rule, even styled to nothing,
    makes the engine split the text internally, which corrupts deletes */
-body:not(.no-dropcap) .chapter-body:not(.cap-off) p:not(.poetry):not(p:not(.poetry) ~ p)::first-letter {
+body:not(.no-dropcap) .chapter-body:not(.cap-off) p:not(.poetry):not([data-fmt]):not(p:not(.poetry):not([data-fmt]) ~ p)::first-letter {
   font-size: 3.4em; float: left; line-height: 0.8;
   padding: 4px 8px 0 0; font-family: var(--dropcap-font);
 }
+/* Paragraph styles (Format menu, or Markdown habits: "# ", "## ", "> ",
+   "- ", "1. "). Each is an ordinary paragraph carrying data-fmt; none
+   takes a first-line indent or a drop cap. */
+.chapter-body p[data-fmt] { text-indent: 0; }
+.chapter-body p[data-fmt="h1"] { font-size: 1.45em; font-weight: 700; line-height: 1.3; margin: 1.1em 0 0.45em; }
+.chapter-body p[data-fmt="h2"] { font-size: 1.18em; font-weight: 700; line-height: 1.4; margin: 0.9em 0 0.35em; }
+.chapter-body p[data-fmt="h1"]:first-child, .chapter-body p[data-fmt="h2"]:first-child { margin-top: 0; }
+.chapter-body p[data-fmt="h1"] + p, .chapter-body p[data-fmt="h2"] + p { text-indent: 0; }
+.chapter-body p[data-fmt="quote"] {
+  margin: 0 2.5em; padding-left: 1em;
+  border-left: 3px solid rgba(128, 128, 128, 0.35);
+}
+.chapter-body p[data-fmt="ul"], .chapter-body p[data-fmt="ol"] { margin: 0 0 0 2.5em; position: relative; }
+.chapter-body p[data-fmt="ul"]::before { content: '•'; position: absolute; right: calc(100% + 0.6em); }
+/* numbers count along each unbroken run of numbered lines */
+.chapter-body p[data-fmt="ol"] { counter-increment: neo-ol; }
+.chapter-body p[data-fmt="ol"]:first-child,
+.chapter-body p:not([data-fmt="ol"]) + p[data-fmt="ol"] { counter-reset: neo-ol; }
+.chapter-body p[data-fmt="ol"]::before { content: counter(neo-ol) '.'; position: absolute; right: calc(100% + 0.5em); }
+/* a quote or list breathes above and below, like a poem */
+.chapter-body p:not([data-fmt="quote"]) + p[data-fmt="quote"],
+.chapter-body p:not([data-fmt="ul"]):not([data-fmt="ol"]) + p:is([data-fmt="ul"], [data-fmt="ol"]) { margin-top: 0.9em; }
+.chapter-body p[data-fmt="quote"] + p:not([data-fmt="quote"]),
+.chapter-body p:is([data-fmt="ul"], [data-fmt="ol"]) + p:not([data-fmt="ul"]):not([data-fmt="ol"]) { margin-top: 0.9em; }
+.chapter-body p[data-fmt="quote"] + p:not([data-fmt]), .chapter-body p:is([data-fmt="ul"], [data-fmt="ol"]) + p:not([data-fmt]) { text-indent: 0; }
+
 /* NEO's spellcheck pass: flagged words, painted like search matches */
 ::highlight(neo-spell) {
   text-decoration: underline wavy #cf5c56;

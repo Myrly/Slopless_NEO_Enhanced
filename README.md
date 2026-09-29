@@ -35,6 +35,10 @@ There's a white page by default or a dark mode (which I now prefer!). Controls f
 
 One Enter: new paragraph. Two: a `***` section break. Three: a new chapter. The goal is to KEEP WRITING.
 
+**Formatting** 
+
+Bold, italic, underline and strikethrough, plus headings, block quotes, and bulleted or numbered lists — all under **Format**, all with keyboard shortcuts. Markdown habits work as you type: `*italic*`, `**bold**`, `~~struck~~`, and at the start of a line `# `, `## `, `> `, `- ` or `1. `. Everything carries through to every export.
+
 **Darlings** 
 
 The writing advice is "kill your darlings" — but I say: *keep the bodies*. Drag any beautiful-but-in-the-way passage onto the Darlings tab. It leaves your manuscript but isn't lost. Darlings restore to the exact spot it came from. More like zombies than darlings.
