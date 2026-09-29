@@ -1,4 +1,16 @@
-# NEO
+# NEO Enhanced
+
+My own version of [NEO](https://github.com/hughhowey/neo), the writing app by Hugh Howey. The rest of this README is his, with a few bits changed to fit this version. All the credit for NEO goes to him.
+
+## What's different here
+
+- **Text formatting.** Underline, strikethrough, headings, block quotes, and bulleted or numbered lists, on top of the bold and italic NEO already had. They're all in the Format menu with shortcuts, and Markdown works as you type. More on that under Formatting below.
+- **No automatic updates.** This version never checks for new releases or installs them, so an official NEO update can't replace it. The Check for Update menu item is gone too.
+- **Shelf fix.** After the NEO Pocket commit (285c081), the desktop app opened to an empty window with no shelf. That's fixed here, and I sent the same fix back to the original as [hughhowey/neo#130](https://github.com/hughhowey/neo/pull/130).
+
+It uses the same `~/Documents/NEO Library` folder as the original NEO, so your books show up in both. Just don't run the two at once.
+
+---
 
 **A distraction-free word processor for authors, by a wannabe author.**
 
@@ -8,18 +20,19 @@ NEO runs locally. WIPs are saved in plain files on your disk. No accounts or sub
 
 ## Download
 
-Get the latest installer from the **[Releases page](../../releases)**:
+There are no ready-made installers for this version, so you build it yourself. On a Mac with Apple silicon it takes a few commands (you need [Node.js](https://nodejs.org)):
 
-- **macOS** — download the `.dmg` for older Intel machines or the arm64 file for Mac silicon. Open it and drag NEO to Applications.
-- **Windows** — download the `.exe` and run it. Or get the setup installer and run that.
-- **Linux** — download the `.AppImage`, make it executable, and run it:
+```
+git clone https://github.com/justsomerandomshit/NEO_Enhanced.git
+cd NEO_Enhanced
+npm install
+npx electron-builder --mac dir --arm64 -c.mac.notarize=false -c.mac.identity=null
+codesign --force --deep --sign - dist/mac-arm64/NEO.app
+```
 
-  ```
-  chmod +x NEO-*.AppImage
-  ./NEO-*.AppImage
-  ```
+Then drag `dist/mac-arm64/NEO.app` into Applications. On an Intel Mac, swap `--arm64` for `--x64` and `mac-arm64` for `mac`.
 
-  If it complains about a sandbox (common on Ubuntu 24.04 and newer), run it as `./NEO-*.AppImage --no-sandbox`. Your library lives in `~/Documents/NEO Library`; File → Library Folder… moves it anywhere you like.
+If you want the official NEO with installers for Mac, Windows and Linux, get it from the [original Releases page](https://github.com/hughhowey/neo/releases). Your library lives in `~/Documents/NEO Library`; File → Library Folder… moves it anywhere you like.
 
 ## Why NEO?
 
@@ -84,8 +97,8 @@ NEO speaks English, French, Spanish, Portuguese, German, Italian, Dutch and Poli
 Requires [Node.js](https://nodejs.org).
 
 ```
-git clone https://github.com/hughhowey/neo.git
-cd neo
+git clone https://github.com/justsomerandomshit/NEO_Enhanced.git
+cd NEO_Enhanced
 npm install
 npm start
 ```
