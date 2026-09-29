@@ -749,6 +749,7 @@ function bookTile(meta) {
     if (meta.coverImage) {
       options.push({ label: t('Remove cover art'), desc: t('Deletes the image from the book folder. (To just hide it, use the ↻ on the book.)'), danger: true, value: 'uncover' });
     }
+    if (!window.Capacitor) options.push({ label: t('Save cover as image…'), desc: t('The cover as it looks on the shelf, saved full size wherever you like.'), value: 'saveCover' });
     // Pocket has no File menu: export lives here and in the ⋯ sheet
     if (window.Capacitor) options.push({ label: t('Export…'), desc: t('Text, Markdown, HTML, Word or EPUB, through the share sheet.'), value: 'export' });
     options.push(
@@ -783,6 +784,8 @@ function bookTile(meta) {
         await writeBookMeta(meta.id, meta);
         renderShelves();
       }
+    } else if (choice === 'saveCover') {
+      await saveCoverImage(meta);
     } else if (choice === 'uncover') {
       await window.neo.removeCover(meta.id);
       meta.coverImage = null;
@@ -810,6 +813,39 @@ function bookTile(meta) {
     }
   });
   return el;
+}
+
+// The cover the shelf is showing, as a picture file: the writer's own image
+// just as they gave it; NEO's painting or the abstract at full size
+// (1600×2560, KDP's ratio) with the title and author set on top.
+async function saveCoverImage(meta) {
+  const mode = coverMode(meta);
+  const defaultName = safeName(meta.title) + '-cover';
+  let payload = null;
+  if (mode === 'image') {
+    const c = await window.neo.readCover(meta.id, meta.coverImage);
+    if (c) payload = { format: c.ext, defaultName, content: c.base64, base64: true };
+  }
+  if (!payload) {
+    await NeoCovers.ready;
+    let image = null;
+    if (mode === 'painted') {
+      const data = await window.neo.readCover(meta.id, meta.coverArt.file);
+      if (data) {
+        image = await new Promise((resolve) => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.onerror = () => resolve(null);
+          img.src = `data:${data.mime};base64,${data.base64}`;
+        });
+      }
+    }
+    // JPEG: what KDP asks for, and a tenth the size of a PNG of all that grain
+    const url = NeoCovers.renderFull(meta, image ? { image } : {}).toDataURL('image/jpeg', 0.92);
+    payload = { format: 'jpg', defaultName, content: url.split(',')[1], base64: true };
+  }
+  const saved = await window.neo.exportSave(payload);
+  if (saved) toast(t('Saved: {file}', { file: saved.split(/[\\/]/).pop() }));
 }
 
 /* ---- painted covers ----

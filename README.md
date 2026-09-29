@@ -5,6 +5,7 @@ My own version of [NEO](https://github.com/hughhowey/neo), the writing app by Hu
 ## What's different here
 
 - **Text formatting.** Underline, strikethrough, headings, block quotes, and bulleted or numbered lists, on top of the bold and italic NEO already had. They're all in the Format menu with shortcuts, and Markdown works as you type. More on that under Formatting below.
+- **Save cover as image.** Right-click a book on the shelf and pick Save cover as image… to get its cover as a full-size JPEG (1600×2560), title and author included, just like it looks on the shelf. If you gave the book your own cover image, you get that image back as it is.
 - **No automatic updates.** This version never checks for new releases or installs them, so an official NEO update can't replace it. The Check for Update menu item is gone too.
 - **Shelf fix.** After the NEO Pocket commit (285c081), the desktop app opened to an empty window with no shelf. That's fixed here, and I sent the same fix back to the original as [hughhowey/neo#130](https://github.com/hughhowey/neo/pull/130).
 
