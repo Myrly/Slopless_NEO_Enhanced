@@ -15,11 +15,6 @@
   "build": {
     "appId": "com.hughhowey.neo",
     "productName": "NEO",
-    "publish": {
-      "provider": "github",
-      "owner": "hughhowey",
-      "repo": "neo"
-    },
     "mac": {
       "category": "public.app-category.productivity",
       "target": [

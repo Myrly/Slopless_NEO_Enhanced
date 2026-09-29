@@ -1441,10 +1441,6 @@ function buildMenu() {
         {
           label: t('About NEO'),
           click: () => sendToWindow({ type: 'about' })
-        },
-        {
-          label: t('Check for Update…'),
-          click: () => sendToWindow({ type: 'checkUpdate' })
         }
       ]
     }
@@ -1478,9 +1474,13 @@ ipcMain.handle('app:version', () => app.getVersion());
 // itself before asking for the restart. A build that can't self-update —
 // `npm start`, the Windows portable .exe, anything unsigned — falls back
 // to the release page on GitHub, as before.
+// This copy is a personal version: it never looks for updates, so an
+// official release can't replace it.
+const UPDATES_OFF = true;
 let updater = null;          // electron-updater's autoUpdater, wired once
 let updaterReady = false;    // an update is downloaded and waiting
 function getUpdater() {
+  if (UPDATES_OFF) return null;
   if (updater || !app.isPackaged) return updater;
   const { autoUpdater } = require('electron-updater');
   autoUpdater.logger = null;
@@ -1587,7 +1587,7 @@ if (!app.requestSingleInstanceLock()) {
 // Update…. Any failure is logged and swallowed, so an offline machine or an
 // unsigned build never notices.
 function checkForUpdates() {
-  if (!app.isPackaged) return;
+  if (UPDATES_OFF || !app.isPackaged) return;
   setTimeout(async () => {
     try {
       const u = getUpdater();
