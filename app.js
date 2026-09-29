@@ -5364,11 +5364,46 @@ function updateZoomDisplay() {
   const el = $('#zoom-level');
   if (el) el.textContent = Math.round((library.pageZoom || 1) * 100) + '%';
 }
-function setPageZoom(next) {
+// Zooming or resizing the text reflows the whole book, and the same scroll
+// offset lands somewhere else. Pin a spot in the text first: the caret if
+// it's on screen, otherwise the point being pinched, otherwise the middle
+// of the page. Then scroll it back to where it was.
+function keepReadingPlace(change, at) {
+  const sc = $('#paper-scroll');
+  if (!sc || $('#editor-view').hidden) { change(); return; }
+  const box = sc.getBoundingClientRect();
+  const topOf = (r) => {
+    const rect = r.getBoundingClientRect();
+    if (rect.height) return rect.top;
+    const el = r.startContainer.nodeType === Node.ELEMENT_NODE ? r.startContainer : r.startContainer.parentElement;
+    return el ? el.getBoundingClientRect().top : null; // an empty line has no text to measure
+  };
+  let anchor = null;
+  const sel = window.getSelection();
+  if (!at && sel.rangeCount && sc.contains(sel.anchorNode)) {
+    const caret = sel.getRangeAt(0).cloneRange();
+    caret.collapse(true);
+    const y = topOf(caret);
+    if (y !== null && y >= box.top && y <= box.bottom) anchor = caret;
+  }
+  if (!anchor) {
+    const x = Math.min(box.right - 1, Math.max(box.left + 1, at ? at.x : box.left + box.width / 2));
+    const y = Math.min(box.bottom - 1, Math.max(box.top + 1, at ? at.y : box.top + box.height / 2));
+    const r = document.caretRangeFromPoint(x, y);
+    if (r && sc.contains(r.startContainer)) anchor = r;
+  }
+  const before = anchor && topOf(anchor);
+  change();
+  if (before === null || before === undefined) return;
+  const after = topOf(anchor); // reads the new layout
+  if (after !== null) sc.scrollTop += after - before;
+}
+
+function setPageZoom(next, at) {
   next = Math.min(1.6, Math.max(0.75, next));
   if (next === (library.pageZoom || 1)) return;
   library.pageZoom = next;
-  document.documentElement.style.setProperty('--page-zoom', next);
+  keepReadingPlace(() => document.documentElement.style.setProperty('--page-zoom', next), at);
   updateZoomDisplay();
   clearTimeout(zoomSaveTimer);
   zoomSaveTimer = setTimeout(() => { window.neo.writeLibrary(library); }, 600);
@@ -5376,7 +5411,7 @@ function setPageZoom(next) {
 $('#editor-view').addEventListener('wheel', (e) => {
   if (!e.ctrlKey) return;
   e.preventDefault();
-  setPageZoom((library.pageZoom || 1) * Math.exp(-e.deltaY * 0.005));
+  setPageZoom((library.pageZoom || 1) * Math.exp(-e.deltaY * 0.005), { x: e.clientX, y: e.clientY });
 }, { passive: false });
 
 // zoom control in the bottom bar: buttons, click-to-reset, and scroll
@@ -6369,7 +6404,7 @@ window.neo.onMenu(async (msg) => {
     library.editorFontSize = msg.value === 0 ? 17 : Math.min(22, Math.max(14, cur + msg.value));
     if (msg.value === 0) library.pageZoom = 1; // ⌘0 resets pinch zoom too
     await window.neo.writeLibrary(library);
-    applyFonts();
+    keepReadingPlace(applyFonts);
   }
   if (msg.type === 'bodyFontPick') {
     const name = await pickLocalFont();
