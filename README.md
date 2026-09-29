@@ -7,8 +7,9 @@ My own version of [NEO](https://github.com/hughhowey/neo), the writing app by Hu
 - **Text formatting.** Underline, strikethrough, headings, block quotes, and bulleted or numbered lists, on top of the bold and italic NEO already had. They're all in the Format menu with shortcuts, and Markdown works as you type. More on that under Formatting below.
 - **Paste keeps formatting.** Paste from Google Docs, Word or a web page and headings, lists, quotes, bold, italic, underline and strikethrough come along. Paste Markdown (from a notes app, a code editor, or a chatbot) and it gets turned into the same formatting instead of showing the asterisks and hashes.
 - **Save cover as image.** Right-click a book on the shelf and pick Save cover as image… to get its cover as a full-size JPEG (1600×2560), title and author included, just like it looks on the shelf. If you gave the book your own cover image, you get that image back as it is.
+- **Zooming keeps your place.** Pinching, Ctrl+scrolling, the zoom buttons and the text size shortcuts no longer throw you to a different part of the chapter. Also sent to the original as [hughhowey/neo#132](https://github.com/hughhowey/neo/pull/132).
 - **No automatic updates.** This version never checks for new releases or installs them, so an official NEO update can't replace it. The Check for Update menu item is gone too.
-- **Shelf fix.** After the NEO Pocket commit (285c081), the desktop app opened to an empty window with no shelf. That's fixed here, and I sent the same fix back to the original as [hughhowey/neo#130](https://github.com/hughhowey/neo/pull/130).
+- **Shelf fix.** After the NEO Pocket commit (285c081), the desktop app opened to an empty window with no shelf. That's fixed here, and the same fix is now in the original too ([hughhowey/neo#130](https://github.com/hughhowey/neo/pull/130)).
 
 It uses the same `~/Documents/NEO Library` folder as the original NEO, so your books show up in both. Just don't run the two at once.
 
