@@ -1,6 +1,9 @@
+# Slopless
+Just getting rid of all the ai features because I dislike them. For my personal use initially but if anyone wants to use it, feel free to do so.
+
 # NEO Enhanced
 
-My own version of [NEO](https://github.com/hughhowey/neo), the writing app by Hugh Howey. The rest of this README is his, with a few bits changed to fit this version. All the credit for NEO goes to him.
+justsomerandomshit's own version of [NEO](https://github.com/hughhowey/neo), the writing app by Hugh Howey. The rest of this README is his, with a few bits changed to fit this version. All the credit for NEO goes to him.
 
 ## What's different here
 
