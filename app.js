@@ -220,6 +220,11 @@ function cleanChapterEl(id) {
   return holder;
 }
 const chapterText = (id) => cleanChapterEl(id).innerText;
+function chapterHasText(id) {
+  const chapter = cleanChapterEl(id);
+  chapter.querySelectorAll('p.scene-break').forEach((p) => p.remove());
+  return chapter.innerText.trim() !== '';
+}
 
 // Word counts are cached per chapter and only recomputed for the chapter being edited.
 let wordCache = {};
@@ -1400,13 +1405,15 @@ async function chapterMenu(chId, index) {
 /* ================================================================== */
 
 function wireChapterBody(body, chId) {
+  let restoreChapterNote = false;
   body.addEventListener('focus', () => { currentChapterId = chId; updateCounters(); highlightNav(); });
 
   body.addEventListener('input', (e) => {
     if ((e.inputType || '').startsWith('delete')) {
-      restoreEmptySectionGhosts(body, chId);
-      syncGhosts(chId);
+      restoreOutlineGhosts(body, chId);
+      syncGhosts(chId, restoreChapterNote);
     }
+    restoreChapterNote = false;
     breakRun = 0; // fresh typing: ⌘Z belongs to the engine again
     chapterHTML[chId] = captureBody(body);
     wordCache[chId] = null;
@@ -1541,14 +1548,16 @@ function wireChapterBody(body, chId) {
   // the moment writing hits a ghost, it becomes prose
   // (it keeps its data-sec-id so the outline knows it's been written)
   body.addEventListener('beforeinput', (e) => {
+    restoreChapterNote = (e.inputType || '').startsWith('delete') &&
+      !!body.querySelector('p[data-ch-note]');
     const sel = window.getSelection();
     if (!sel.rangeCount) return;
     let el = sel.anchorNode;
     if (el && el.nodeType === Node.TEXT_NODE) el = el.parentElement;
-    const sectionPara = el && el.closest ? el.closest('p[data-sec-id]') : null;
-    if (!sectionPara || !body.contains(sectionPara)) return;
-    if (!(e.inputType || '').startsWith('delete') && sectionPara.classList.contains('ghost')) {
-      sectionPara.classList.remove('ghost');
+    const outlinePara = el && el.closest ? el.closest('p[data-sec-id], p[data-ch-note]') : null;
+    if (!outlinePara || !body.contains(outlinePara)) return;
+    if (!(e.inputType || '').startsWith('delete') && outlinePara.classList.contains('ghost')) {
+      outlinePara.classList.remove('ghost');
     }
   });
 }
@@ -3118,6 +3127,7 @@ function renderNav() {
     note.addEventListener('blur', () => {
       book.chapterNotes[chId] = note.textContent.trim();
       scheduleMetaSave();
+      syncGhosts(chId);
     });
     item.appendChild(note);
 
@@ -3573,21 +3583,35 @@ function renderOutline(focusTarget) {
   syncButton.className = 'ol-sync';
   syncButton.type = 'button';
   syncButton.textContent = t('Sync outline to empty chapters');
-  syncButton.addEventListener('click', () => {
-    let synced = 0;
-    for (const chId of book.chapterOrder) {
-      if (countWords(chapterText(chId)) > 0) continue;
-      const sections = (book.sectionNotes[chId] || []).filter((section) => section.text.trim());
-      if (!sections.length) continue;
-      const body = document.querySelector(`.chapter[data-id="${chId}"] .chapter-body`);
-      if (!body) continue;
-      restoreEmptySectionGhosts(body, chId);
-      syncGhosts(chId);
-      synced++;
+  syncButton.addEventListener('click', async () => {
+    const changed = [];
+    try {
+      for (const chId of book.chapterOrder) {
+        if (chapterHasText(chId)) continue;
+        const hasChapterNote = !!(book.chapterNotes[chId] || '').trim();
+        const hasSectionNotes = (book.sectionNotes[chId] || []).some((section) => section.text.trim());
+        if (!hasChapterNote && !hasSectionNotes) continue;
+        const body = document.querySelector(`.chapter[data-id="${chId}"] .chapter-body`);
+        if (!body) continue;
+        restoreOutlineGhosts(body, chId);
+        syncGhosts(chId, true);
+        changed.push(chId);
+      }
+      if (!changed.length) {
+        toast(t('No empty chapters to sync.'));
+        return;
+      }
+      for (const chId of changed) clearTimeout(saveTimers[chId]);
+      const results = await Promise.allSettled(changed.map((chId) => persistChapter(chId)));
+      const failure = results.find((result) => result.status === 'rejected');
+      if (failure) throw failure.reason;
+      toast(t('Outline synced.'));
+    } catch (error) {
+      console.error('Could not sync outline to empty chapters:', error);
+      toast(t('Outline sync failed: {message}', {
+        message: error && error.message ? error.message : String(error)
+      }));
     }
-    toast(synced
-      ? t('Outline synced.')
-      : t('No empty chapters to sync.'));
   });
   syncRow.appendChild(syncButton);
   wrap.appendChild(syncRow);
@@ -3650,7 +3674,7 @@ function outlineLine(kind, chId, secId, index, label, text) {
 
   txt.addEventListener('blur', () => {
     save();
-    if (kind === 'section') syncGhosts(chId);
+    syncGhosts(chId);
     renderNav();
   });
 
@@ -3785,9 +3809,11 @@ function outlineLine(kind, chId, secId, index, label, text) {
 // Push section notes into the manuscript as gray ghost paragraphs,
 // with real *** scene breaks between sections.
 // Once a ghost has been written over, it goes away.
-function syncGhosts(chId) {
+function syncGhosts(chId, includeChapterNote = false) {
   const body = document.querySelector(`.chapter[data-id="${chId}"] .chapter-body`);
   if (!body) return;
+  includeChapterNote = includeChapterNote || !!body.querySelector('p[data-ch-note]');
+  const chapterNote = (book.chapterNotes && book.chapterNotes[chId] || '').trim();
   const list = (book.sectionNotes && book.sectionNotes[chId]) || [];
   const keep = new Set(list.map((s) => s.id));
 
@@ -3802,19 +3828,28 @@ function syncGhosts(chId) {
       p.remove();
     }
   });
+  if (includeChapterNote && !chapterNote) body.querySelectorAll('p.ghost[data-ch-note]').forEach((p) => p.remove());
 
   // 2. Pull all still-ghost paragraphs out, then re-append in outline order
   //    so the ghosts always mirror the outline's sequence
+  if (includeChapterNote) body.querySelectorAll('p.ghost[data-ch-note]').forEach((p) => p.remove());
   for (const p of [...body.querySelectorAll('p.ghost[data-sec-id]')]) {
     const brk = breakFor(p.dataset.secId);
     if (brk) brk.remove();
     p.remove();
   }
+  if (includeChapterNote && chapterNote && !body.querySelector('p[data-ch-note]:not(.ghost)')) {
+    const p = document.createElement('p');
+    p.className = 'ghost';
+    p.dataset.chNote = '1';
+    p.textContent = chapterNote;
+    body.insertBefore(p, body.firstChild);
+  }
   for (const sec of list) {
     // written over already? Leave it alone
     const written = body.querySelector(`p[data-sec-id="${sec.id}"]:not(.ghost)`);
     if (written) continue;
-    if (!sec.text) continue;
+    if (!sec.text.trim()) continue;
     // *** between this ghost and whatever comes before it
     const hasContent = body.innerText.trim() !== '';
     if (hasContent && !(body.lastElementChild && body.lastElementChild.classList.contains('scene-break'))) {
@@ -3833,7 +3868,7 @@ function syncGhosts(chId) {
   syncChapter(body, chId);
 }
 
-function restoreEmptySectionGhosts(body, chId) {
+function restoreOutlineGhosts(body, chId) {
   const sections = (book.sectionNotes && book.sectionNotes[chId]) || [];
   for (const p of body.querySelectorAll('p[data-sec-id]:not(.ghost)')) {
     if (p.textContent.trim()) continue;
@@ -3841,6 +3876,12 @@ function restoreEmptySectionGhosts(body, chId) {
     if (!section || !section.text.trim()) continue;
     p.classList.add('ghost');
     p.textContent = section.text;
+  }
+  const note = (book.chapterNotes && book.chapterNotes[chId] || '').trim();
+  const chapterNote = body.querySelector('p[data-ch-note]:not(.ghost)');
+  if (note && chapterNote && !chapterNote.textContent.trim()) {
+    chapterNote.classList.add('ghost');
+    chapterNote.textContent = note;
   }
 }
 
@@ -4091,11 +4132,15 @@ $('#paper-scroll').addEventListener('scroll', () => {
 // knowledge is what lets it write only what changed (a library shared over
 // iCloud or Syncthing must not be re-written every twenty seconds) and, in
 // refreshFromDisk, tell another device's edits from its own.
-function persistChapter(chId, html) {
-  if (!book) return Promise.resolve(false);
+async function persistChapter(chId, html) {
+  if (!book) return false;
   if (html === undefined) html = chapterHTML[chId] || '';
-  savedHTML[chId] = html;
-  return window.neo.writeChapter(book.id, chId, html);
+  const bookId = book.id;
+  const saved = savedHTML;
+  const written = await window.neo.writeChapter(bookId, chId, html);
+  if (!written) throw new Error(t('The chapter file could not be written.'));
+  saved[chId] = html;
+  return true;
 }
 
 function scheduleChapterSave(chId) {
