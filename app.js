@@ -1402,7 +1402,11 @@ async function chapterMenu(chId, index) {
 function wireChapterBody(body, chId) {
   body.addEventListener('focus', () => { currentChapterId = chId; updateCounters(); highlightNav(); });
 
-  body.addEventListener('input', () => {
+  body.addEventListener('input', (e) => {
+    if ((e.inputType || '').startsWith('delete')) {
+      restoreEmptySectionGhosts(body, chId);
+      syncGhosts(chId);
+    }
     breakRun = 0; // fresh typing: ⌘Z belongs to the engine again
     chapterHTML[chId] = captureBody(body);
     wordCache[chId] = null;
@@ -1536,14 +1540,15 @@ function wireChapterBody(body, chId) {
   });
   // the moment writing hits a ghost, it becomes prose
   // (it keeps its data-sec-id so the outline knows it's been written)
-  body.addEventListener('beforeinput', () => {
+  body.addEventListener('beforeinput', (e) => {
     const sel = window.getSelection();
     if (!sel.rangeCount) return;
     let el = sel.anchorNode;
     if (el && el.nodeType === Node.TEXT_NODE) el = el.parentElement;
-    const ghost = el && el.closest ? el.closest('p.ghost') : null;
-    if (ghost && body.contains(ghost)) {
-      ghost.classList.remove('ghost');
+    const sectionPara = el && el.closest ? el.closest('p[data-sec-id]') : null;
+    if (!sectionPara || !body.contains(sectionPara)) return;
+    if (!(e.inputType || '').startsWith('delete') && sectionPara.classList.contains('ghost')) {
+      sectionPara.classList.remove('ghost');
     }
   });
 }
@@ -3562,6 +3567,31 @@ function renderOutline(focusTarget) {
   const wrap = $('#outline-list');
   wrap.innerHTML = '';
 
+  const syncRow = document.createElement('div');
+  syncRow.className = 'ol-sync-row';
+  const syncButton = document.createElement('button');
+  syncButton.className = 'ol-sync';
+  syncButton.type = 'button';
+  syncButton.textContent = t('Sync outline to empty chapters');
+  syncButton.addEventListener('click', () => {
+    let synced = 0;
+    for (const chId of book.chapterOrder) {
+      if (countWords(chapterText(chId)) > 0) continue;
+      const sections = (book.sectionNotes[chId] || []).filter((section) => section.text.trim());
+      if (!sections.length) continue;
+      const body = document.querySelector(`.chapter[data-id="${chId}"] .chapter-body`);
+      if (!body) continue;
+      restoreEmptySectionGhosts(body, chId);
+      syncGhosts(chId);
+      synced++;
+    }
+    toast(synced
+      ? t('Outline synced.')
+      : t('No empty chapters to sync.'));
+  });
+  syncRow.appendChild(syncButton);
+  wrap.appendChild(syncRow);
+
   book.chapterOrder.forEach((chId, i) => {
     wrap.appendChild(outlineLine('chapter', chId, null, i, String(i + 1),
       book.chapterNotes[chId] || ''));
@@ -3801,6 +3831,17 @@ function syncGhosts(chId) {
     body.appendChild(p);
   }
   syncChapter(body, chId);
+}
+
+function restoreEmptySectionGhosts(body, chId) {
+  const sections = (book.sectionNotes && book.sectionNotes[chId]) || [];
+  for (const p of body.querySelectorAll('p[data-sec-id]:not(.ghost)')) {
+    if (p.textContent.trim()) continue;
+    const section = sections.find((item) => item.id === p.dataset.secId);
+    if (!section || !section.text.trim()) continue;
+    p.classList.add('ghost');
+    p.textContent = section.text;
+  }
 }
 
 let auxDirty = false;

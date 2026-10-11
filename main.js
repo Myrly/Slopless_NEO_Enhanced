@@ -452,7 +452,7 @@ ipcMain.handle('fullscreen:toggle', (e) => {
 });
 
 // Regular fullscreen: Esc walks you out like any civilized app
-ipcMain.handle('fullscreen:escape', (e) => {
+§ipcMain.handle('fullscreen:escape', (e) => {
   const win = BrowserWindow.fromWebContents(e.sender);
   if (win && win.isFullScreen()) {
     win.setFullScreen(false);

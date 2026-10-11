@@ -607,6 +607,12 @@ body.bright .spell-menu button { color: #eee; }
 }
 .ol-chapter { margin-top: 18px; }
 .ol-section { margin-left: 40px; }
+.ol-sync-row { display: flex; justify-content: flex-end; margin-bottom: 16px; }
+.ol-sync {
+  background: none; border: 1px solid #d8d2c2; border-radius: 4px;
+  color: #777; font-size: 12px; padding: 5px 10px;
+}
+.ol-sync:hover { border-color: var(--accent); color: var(--ink); }
 .ol-num {
   font-family: var(--body-font); color: #8d8778; min-width: 24px; text-align: right;
   user-select: none; flex-shrink: 0;
